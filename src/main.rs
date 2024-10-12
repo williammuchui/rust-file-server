@@ -10,6 +10,7 @@ const MAX_THREADS: usize = 10;
 fn handle_client(mut stream: TcpStream, base_path: &str) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
 
+    /*handle commands continuosly until keyborad interupt or netcat exit signal*/
     loop {
         let mut request = String::new();
         match reader.read_line(&mut request) {
@@ -22,9 +23,9 @@ fn handle_client(mut stream: TcpStream, base_path: &str) {
                 }
 
                 let response = match parts[0] {
-                    "GET" => {
+                    "GET" | "get" => {
                         if parts.len() < 2 {
-                            "Invalid GET command\n".to_string()
+                            "Invalid GET command! Expected filename!\n".to_string()
                         } else {
                             let filename = parts[1];
                             let path = Path::new(base_path).join(filename);
@@ -34,9 +35,9 @@ fn handle_client(mut stream: TcpStream, base_path: &str) {
                             }
                         }
                     }
-                    "PUT" => {
+                    "PUT" | "put" => {
                         if parts.len() < 3 {
-                            "Invalid PUT command\n".to_string()
+                            "Invalid PUT command! Expected filename and Contents\n".to_string()
                         } else {
                             let filename = parts[1];
                             let content = parts[2..].join(" ");
@@ -47,7 +48,7 @@ fn handle_client(mut stream: TcpStream, base_path: &str) {
                             }
                         }
                     }
-                    "LS" => {
+                    "LS" | "ls" => {
                         let mut file_list = String::new();
                         if let Ok(entries) = fs::read_dir(base_path) {
                             for entry in entries {
@@ -81,7 +82,11 @@ fn handle_client(mut stream: TcpStream, base_path: &str) {
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+
+    /* threadpool*/
     let pool = Arc::new(Mutex::new(Vec::with_capacity(MAX_THREADS)));
+
+    /*base path for the server files*/
     let base_path = "server_files";
 
     fs::create_dir_all(base_path).unwrap();
@@ -94,6 +99,8 @@ fn main() {
         let base_path = base_path.to_string();
 
         let mut locked_pool = pool.lock().unwrap();
+
+        /* if no aavailable thread,, sleep for 100ms and then try to reconnect again*/
         if locked_pool.len() >= MAX_THREADS {
             println!("Max threads reached, waiting for available thread");
             while locked_pool.len() >= MAX_THREADS {
@@ -102,12 +109,14 @@ fn main() {
             }
         }
 
+        /*spawn a new therad for the connection*/
         let handle = thread::spawn(move || {
             handle_client(stream, &base_path);
         });
 
         locked_pool.push(handle);
 
+        /*release handle on completion*/
         locked_pool.retain(|handle| !handle.is_finished());
     }
 }
