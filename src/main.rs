@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -8,52 +8,73 @@ use std::thread;
 const MAX_THREADS: usize = 10;
 
 fn handle_client(mut stream: TcpStream, base_path: &str) {
-    let mut buffer = [0; 1024];
-    stream.read(&mut buffer).unwrap();
-    let request = String::from_utf8_lossy(&buffer[..]);
-    let parts: Vec<&str> = request.trim().split_whitespace().collect();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
 
-    if parts.len() < 2 {
-        let response = "Invalid command\n";
-        stream.write(response.as_bytes()).unwrap();
-        return;
-    }
+    loop {
+        let mut request = String::new();
+        match reader.read_line(&mut request) {
+            Ok(0) | Err(_) => break, // Connection closed or error
+            Ok(_) => {
+                let parts: Vec<&str> = request.trim().split_whitespace().collect();
 
-    match parts[0] {
-        "GET" => {
-            let filename = parts[1];
-            let path = Path::new(base_path).join(filename);
-            if let Ok(content) = fs::read_to_string(path) {
-                stream.write(content.as_bytes()).unwrap();
-            } else {
-                stream.write(b"File not found\n").unwrap();
+                if parts.is_empty() {
+                    continue;
+                }
+
+                let response = match parts[0] {
+                    "GET" => {
+                        if parts.len() < 2 {
+                            "Invalid GET command\n".to_string()
+                        } else {
+                            let filename = parts[1];
+                            let path = Path::new(base_path).join(filename);
+                            match fs::read_to_string(path) {
+                                Ok(content) => content,
+                                Err(_) => "File not found\n".to_string(),
+                            }
+                        }
+                    }
+                    "PUT" => {
+                        if parts.len() < 3 {
+                            "Invalid PUT command\n".to_string()
+                        } else {
+                            let filename = parts[1];
+                            let content = parts[2..].join(" ");
+                            let path = Path::new(base_path).join(filename);
+                            match fs::write(path, content) {
+                                Ok(_) => "File written successfully\n".to_string(),
+                                Err(_) => "Failed to write file\n".to_string(),
+                            }
+                        }
+                    }
+                    "LS" => {
+                        let mut file_list = String::new();
+                        if let Ok(entries) = fs::read_dir(base_path) {
+                            for entry in entries {
+                                if let Ok(entry) = entry {
+                                    if let Ok(filename) = entry.file_name().into_string() {
+                                        file_list.push_str(&filename);
+                                        file_list.push('\n');
+                                    }
+                                }
+                            }
+                        }
+                        if file_list.is_empty() {
+                            "No files found\n".to_string()
+                        } else {
+                            file_list
+                        }
+                    }
+                    _ => "Unknown command\n".to_string(),
+                };
+
+                if let Err(_) = stream.write(response.as_bytes()) {
+                    break; // Write error, exit the loop
+                }
+                if let Err(_) = stream.flush() {
+                    break; // Flush error, exit the loop
+                }
             }
-        }
-        "PUT" => {
-            if parts.len() < 3 {
-                stream.write(b"Invalid PUT command\n").unwrap();
-                return;
-            }
-            let filename = parts[1];
-            let content = parts[2..].join(" ");
-            let path = Path::new(base_path).join(filename);
-            if let Ok(_) = fs::write(path, content) {
-                stream.write(b"File written successfully\n").unwrap();
-            } else {
-                stream.write(b"Failed to write file\n").unwrap();
-            }
-        }
-        "LS" => {
-            let paths = fs::read_dir(base_path).unwrap();
-            for path in paths {
-                let entry = path.unwrap();
-                let filename = entry.file_name().into_string().unwrap();
-                stream.write(filename.as_bytes()).unwrap();
-                stream.write(b"\n").unwrap();
-            }
-        }
-        _ => {
-            stream.write(b"Unknown command\n").unwrap();
         }
     }
 }
