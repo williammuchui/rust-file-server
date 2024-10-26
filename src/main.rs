@@ -10,14 +10,16 @@ const MAX_THREADS: usize = 10;
 fn handle_client(mut stream: TcpStream, base_path: &str) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
 
-    /*handle commands continuosly until keyborad interupt or netcat exit signal*/
+    /*handle commands continuously until keyborad interupt or netcat exit signal*/
     loop {
         let mut request = String::new();
         match reader.read_line(&mut request) {
             Ok(0) | Err(_) => break, // Connection closed or error
             Ok(_) => {
+                /*request parts | chunks | word sections*/
                 let parts: Vec<&str> = request.trim().split_whitespace().collect();
 
+                /*no content was passed*/
                 if parts.is_empty() {
                     continue;
                 }
@@ -40,7 +42,8 @@ fn handle_client(mut stream: TcpStream, base_path: &str) {
                             "Invalid PUT command! Expected filename and Contents\n".to_string()
                         } else {
                             let filename = parts[1];
-                            let content = parts[2..].join(" ");
+                            let mut content = parts[2..].join(" ");
+                            content.push_str("\n");
                             let path = Path::new(base_path).join(filename);
                             match fs::write(path, content) {
                                 Ok(_) => "File written successfully\n".to_string(),
@@ -49,6 +52,7 @@ fn handle_client(mut stream: TcpStream, base_path: &str) {
                         }
                     }
                     "LS" | "ls" => {
+                        /*a list of available files*/
                         let mut file_list = String::new();
                         if let Ok(entries) = fs::read_dir(base_path) {
                             for entry in entries {
@@ -100,7 +104,7 @@ fn main() {
 
         let mut locked_pool = pool.lock().unwrap();
 
-        /* if no aavailable thread,, sleep for 100ms and then try to reconnect again*/
+        /* if no available thread,, sleep for 100ms and then try to reconnect again*/
         if locked_pool.len() >= MAX_THREADS {
             println!("Max threads reached, waiting for available thread");
             while locked_pool.len() >= MAX_THREADS {
@@ -109,11 +113,12 @@ fn main() {
             }
         }
 
-        /*spawn a new therad for the connection*/
+        /*spawn a new thread handle for the connection*/
         let handle = thread::spawn(move || {
             handle_client(stream, &base_path);
         });
 
+        /*update pool*/
         locked_pool.push(handle);
 
         /*release handle on completion*/
